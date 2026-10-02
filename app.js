@@ -3,8 +3,8 @@ import {
   getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged,
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
 import {
-  getFirestore, collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot, query, where,
-  serverTimestamp, writeBatch, arrayUnion, arrayRemove,
+  getFirestore, collection, doc, addDoc, setDoc, getDoc, getDocs, updateDoc, deleteDoc, onSnapshot,
+  query, where, serverTimestamp, writeBatch, arrayUnion, arrayRemove,
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 import { firebaseConfig } from './firebase-config.js';
 import {
@@ -22,6 +22,7 @@ const CURRENCIES = ['CLP', 'USD', 'EUR', 'ARS', 'PEN', 'MXN', 'COP', 'BRL'];
 const ICON = {
   edit: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
   trash: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M3 6h18M8 6V4h8v2m-9 0 1 14h8l1-14"/></svg>',
+  share: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M19 8v6M16 11h6M2 21a7 7 0 0 1 14 0"/><circle cx="9" cy="7" r="4" fill="none" stroke="currentColor" stroke-width="2"/></svg>',
   back: '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M15 18l-6-6 6-6"/></svg>',
   arrow: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M5 12h14m-6-6 6 6-6 6"/></svg>',
 };
@@ -83,6 +84,7 @@ const state = {
   expenses: [],
   payments: [],
   groupUnsubs: [],
+  join: null, // { code, invite, error }
 };
 
 const fmt = (amount) => formatMoney(amount, state.group?.currency || 'CLP');
@@ -90,6 +92,9 @@ const parse = (text) => parseMoney(text, state.group?.currency || 'CLP');
 const personName = (id) => state.people.find((p) => p.id === id)?.name ?? '(eliminado)';
 const sortedPeople = () => [...state.people].sort((a, b) => a.name.localeCompare(b.name, 'es'));
 const groupRef = () => doc(db, 'groups', state.gid);
+const inviteUrl = (code) => `${location.origin}${location.pathname}#/join/${code}`;
+const randomCode = () => Array.from(crypto.getRandomValues(new Uint8Array(15)))
+  .map((b) => 'abcdefghijkmnpqrstuvwxyz23456789'[b % 32]).join('');
 
 // ---------- auth ----------
 $('#login-btn').addEventListener('click', async () => {
@@ -105,6 +110,7 @@ $('#logout-btn').addEventListener('click', () => signOut(auth));
 onAuthStateChanged(auth, (user) => {
   state.user = user;
   $('#boot').hidden = true;
+  $('#login-invite').hidden = !location.hash.startsWith('#/join/');
   $('#login-view').hidden = !!user;
   $('#app-view').hidden = !user;
   state.groupsUnsub?.();
@@ -124,7 +130,7 @@ onAuthStateChanged(auth, (user) => {
       state.groups = qs.docs.map((d) => ({ id: d.id, ...d.data() }))
         .sort((a, b) => millis(b.createdAt) - millis(a.createdAt));
       state.groupsLoaded = true;
-      if (!state.gid) render();
+      if (!state.gid && !state.join) render();
     },
     (err) => toast(friendly(err)),
   );
@@ -136,6 +142,14 @@ window.addEventListener('hashchange', route);
 
 function route() {
   if (!state.user) return;
+  const j = location.hash.match(/^#\/join\/(\w+)/);
+  if (j) {
+    unsubGroup();
+    if (state.join?.code !== j[1]) loadInvite(j[1]);
+    render();
+    return;
+  }
+  state.join = null;
   const m = location.hash.match(/^#\/g\/([^/]+)(?:\/(\w+))?/);
   const gid = m ? m[1] : null;
   state.tab = m && TABS.some(([k]) => k === m[2]) ? m[2] : 'resumen';
@@ -176,7 +190,124 @@ const main = $('#main');
 
 function render() {
   if (!state.user) return;
-  main.innerHTML = state.gid ? renderGroup() : renderGroups();
+  main.innerHTML = state.join ? renderJoin() : state.gid ? renderGroup() : renderGroups();
+}
+
+// ---------- invitaciones ----------
+async function loadInvite(code) {
+  state.join = { code, invite: null, error: null };
+  try {
+    const snap = await getDoc(doc(db, 'invites', code));
+    if (state.join?.code !== code) return;
+    if (!snap.exists()) throw new Error('missing');
+    state.join.invite = snap.data();
+  } catch {
+    if (state.join?.code !== code) return;
+    state.join.error = true;
+  }
+  render();
+}
+
+function renderJoin() {
+  const { invite, error } = state.join;
+  if (error) {
+    return `<div class="empty card">
+      <h3>Este link ya no sirve</h3>
+      <p class="muted">Puede que lo hayan cambiado. Pídele un link nuevo a quien te invitó.</p>
+      <a class="btn" href="#/">Ir a mis grupos</a></div>`;
+  }
+  if (!invite) return '<div class="loading"><div class="spinner"></div></div>';
+  return `<div class="card join-card">
+    <span class="avatar lg">${initial(invite.groupName)}</span>
+    <p class="muted">Te invitaron a</p>
+    <h1>${esc(invite.groupName)}</h1>
+    <form class="stack-form join-form" data-form="join">
+      <label>¿Cómo te llamas en el grupo?
+        <input name="name" required maxlength="40" value="${esc(state.user.displayName?.split(' ')[0] || '')}" autocomplete="off">
+      </label>
+      <span class="muted small">Si ya te agregaron con ese nombre, quedarás vinculado a esa misma persona.</span>
+      <button class="btn primary btn-block">Unirme al grupo</button>
+    </form>
+  </div>`;
+}
+
+async function joinGroup(name) {
+  const { code, invite } = state.join;
+  const email = state.user.email;
+  const gref = doc(db, 'groups', invite.groupId);
+  await updateDoc(gref, { memberEmails: arrayUnion(email), lastInvite: code });
+  const people = (await getDocs(collection(gref, 'people'))).docs;
+  const mine = people.find((d) => d.data().email === email);
+  const sameName = people.find((d) => !d.data().email
+    && d.data().name.trim().toLowerCase() === name.toLowerCase());
+  if (mine) {
+    // ya estaba vinculado
+  } else if (sameName) {
+    await updateDoc(sameName.ref, { email });
+  } else {
+    await addDoc(collection(gref, 'people'), { name, email, createdAt: serverTimestamp() });
+  }
+  toast(`¡Listo! Ya eres parte de ${invite.groupName}`);
+  location.hash = `#/g/${invite.groupId}/resumen`;
+}
+
+async function ensureInvite() {
+  const g = state.group;
+  if (g.inviteCode) return g.inviteCode;
+  return newInvite();
+}
+
+async function newInvite() {
+  const g = state.group;
+  const code = randomCode();
+  await setDoc(doc(db, 'invites', code), {
+    groupId: g.id, groupName: g.name, createdBy: state.user.email, createdAt: serverTimestamp(),
+  });
+  const old = g.inviteCode;
+  await updateDoc(groupRef(), { inviteCode: code });
+  if (old) await deleteDoc(doc(db, 'invites', old)).catch(() => {});
+  return code;
+}
+
+async function inviteDialog() {
+  let code;
+  try { code = await ensureInvite(); } catch (err) { toast(friendly(err)); return; }
+  const g = state.group;
+  const text = (url) => `Únete a "${g.name}" en Evenly para anotar los gastos: ${url}`;
+  openDialog({
+    title: 'Invitar al grupo',
+    submitLabel: 'Listo',
+    body: `
+      <p class="muted">Comparte este link. Quien lo abra entra con Google, pone su nombre y queda en el grupo con acceso.</p>
+      <div class="invite-link">
+        <input name="link" readonly value="${esc(inviteUrl(code))}">
+        <button type="button" class="btn" data-copy>Copiar</button>
+      </div>
+      <div class="invite-actions">
+        <a class="btn whatsapp" data-wa target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(text(inviteUrl(code)))}">WhatsApp</a>
+        ${navigator.share ? '<button type="button" class="btn" data-share>Compartir…</button>' : ''}
+      </div>
+      <button type="button" class="link link-muted" data-regen>Generar link nuevo (el anterior deja de funcionar)</button>`,
+    onOpen: (form) => {
+      const input = form.link;
+      const setCode = (c) => {
+        input.value = inviteUrl(c);
+        $('[data-wa]', form).href = `https://wa.me/?text=${encodeURIComponent(text(input.value))}`;
+      };
+      $('[data-copy]', form).addEventListener('click', async () => {
+        try { await navigator.clipboard.writeText(input.value); } catch { input.select(); document.execCommand('copy'); }
+        toast('Link copiado');
+      });
+      $('[data-share]', form)?.addEventListener('click', () => {
+        navigator.share({ title: `Evenly · ${g.name}`, text: text(''), url: input.value }).catch(() => {});
+      });
+      $('[data-regen]', form).addEventListener('click', async () => {
+        if (!confirm('El link actual dejará de funcionar. ¿Generar uno nuevo?')) return;
+        try { setCode(await newInvite()); toast('Link nuevo generado'); } catch (err) { toast(friendly(err)); }
+      });
+    },
+    onSubmit: async () => {},
+  });
 }
 
 function renderGroups() {
@@ -221,6 +352,7 @@ function renderGroup() {
     <section class="group-head">
       <a href="#/" class="back" aria-label="Volver">${ICON.back}</a>
       <h1>${esc(g.name)}</h1>
+      <button class="btn sm invite-btn" data-action="invite">${ICON.share} Invitar</button>
     </section>
     <nav class="tabs">${tabs}</nav>
     ${body}`;
@@ -344,7 +476,9 @@ function renderSettings() {
   const hasMoves = state.expenses.length || state.payments.length;
   const people = sortedPeople().map((p) => `
     <li class="item">
-      <div class="item-main item-person"><span class="avatar">${initial(p.name)}</span><span>${esc(p.name)}</span></div>
+      <div class="item-main item-person"><span class="avatar">${initial(p.name)}</span>
+        <span class="person-name"><span>${esc(p.name)}${p.email === state.user.email ? ' <span class="badge">Tú</span>' : ''}</span>
+        ${p.email ? `<span class="muted small">${esc(p.email)}</span>` : ''}</span></div>
       <div class="item-actions">
         <button class="icon-btn" data-action="rename-person" data-id="${esc(p.id)}" title="Renombrar">${ICON.edit}</button>
         <button class="icon-btn danger" data-action="del-person" data-id="${esc(p.id)}" title="Eliminar">${ICON.trash}</button>
@@ -372,8 +506,8 @@ function renderSettings() {
     </section>
 
     <section class="section">
-      <div class="section-head"><h2>Acceso</h2></div>
-      <p class="muted small">Emails de Google que pueden ver y editar este grupo.</p>
+      <div class="section-head"><h2>Acceso</h2><button class="btn sm" data-action="invite">${ICON.share} Invitar con link</button></div>
+      <p class="muted small">Emails de Google que pueden ver y editar este grupo. Lo más fácil es compartir el link de invitación.</p>
       <div class="card">
         <ul class="list">${emails}</ul>
         <form class="inline-form" data-form="add-email">
@@ -596,6 +730,7 @@ main.addEventListener('click', (e) => {
 
   switch (action) {
     case 'new-group': return newGroupDialog();
+    case 'invite': return inviteDialog();
     case 'add-expense': return expenseDialog();
     case 'edit-expense': return expenseDialog(find('expenses'));
     case 'add-payment': return paymentDialog();
@@ -633,6 +768,7 @@ main.addEventListener('click', (e) => {
       run(async () => {
         const ref = groupRef();
         const docs = ['people', 'expenses', 'payments'].flatMap((n) => state[n].map((x) => doc(ref, n, x.id)));
+        if (state.group.inviteCode) docs.push(doc(db, 'invites', state.group.inviteCode));
         for (let i = 0; i < docs.length; i += 400) {
           const batch = writeBatch(db);
           docs.slice(i, i + 400).forEach((d) => batch.delete(d));
@@ -677,8 +813,19 @@ main.addEventListener('submit', (e) => {
       if (fd.get('currency')) data.currency = fd.get('currency');
       run(async () => {
         await updateDoc(groupRef(), data);
+        if (state.group.inviteCode && data.name !== state.group.name) {
+          await updateDoc(doc(db, 'invites', state.group.inviteCode), { groupName: data.name });
+        }
         toast('Cambios guardados');
       });
+      return;
+    }
+    case 'join': {
+      const name = fd.get('name').trim();
+      if (!name) return;
+      const btn = $('button', form);
+      btn.disabled = true;
+      joinGroup(name).catch((err) => { toast(friendly(err)); btn.disabled = false; });
       return;
     }
     default:
