@@ -14,16 +14,34 @@ service cloud.firestore {
       allow create: if signedIn()
         && request.resource.data.ownerEmail == email()
         && email() in request.resource.data.memberEmails;
-      allow update: if signedIn()
-        && email() in resource.data.memberEmails
-        && request.resource.data.ownerEmail == resource.data.ownerEmail
-        && resource.data.ownerEmail in request.resource.data.memberEmails;
+      allow update: if signedIn() && (
+        // Un miembro edita el grupo (sin cambiar al creador ni quitarlo).
+        (email() in resource.data.memberEmails
+          && request.resource.data.ownerEmail == resource.data.ownerEmail
+          && resource.data.ownerEmail in request.resource.data.memberEmails)
+        ||
+        // Alguien con un link de invitación válido se agrega a sí mismo (y a nadie más).
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberEmails', 'lastInvite'])
+          && request.resource.data.memberEmails.toSet()
+             == resource.data.memberEmails.toSet().union([email()].toSet())
+          && get(/databases/$(db)/documents/invites/$(request.resource.data.lastInvite)).data.groupId == gid)
+      );
       allow delete: if signedIn() && resource.data.ownerEmail == email();
 
       // people, expenses, payments
       match /{sub}/{docId} {
         allow read, write: if isMember(gid);
       }
+    }
+
+    // Links de invitación: el código (id del documento) es el secreto.
+    // Se puede leer uno conociendo su código, pero no listarlos.
+    match /invites/{code} {
+      allow get: if signedIn();
+      allow create: if isMember(request.resource.data.groupId);
+      allow update: if isMember(resource.data.groupId)
+        && request.resource.data.groupId == resource.data.groupId;
+      allow delete: if isMember(resource.data.groupId);
     }
   }
 }
