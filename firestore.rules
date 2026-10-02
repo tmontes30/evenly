@@ -1,0 +1,29 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{db}/documents {
+    function signedIn() { return request.auth != null; }
+    function email() { return request.auth.token.email; }
+    function isMember(gid) {
+      return signedIn() &&
+        email() in get(/databases/$(db)/documents/groups/$(gid)).data.memberEmails;
+    }
+
+    match /groups/{gid} {
+      // Solo quienes están en memberEmails pueden ver y editar el grupo.
+      allow read: if signedIn() && email() in resource.data.memberEmails;
+      allow create: if signedIn()
+        && request.resource.data.ownerEmail == email()
+        && email() in request.resource.data.memberEmails;
+      allow update: if signedIn()
+        && email() in resource.data.memberEmails
+        && request.resource.data.ownerEmail == resource.data.ownerEmail
+        && resource.data.ownerEmail in request.resource.data.memberEmails;
+      allow delete: if signedIn() && resource.data.ownerEmail == email();
+
+      // people, expenses, payments
+      match /{sub}/{docId} {
+        allow read, write: if isMember(gid);
+      }
+    }
+  }
+}
