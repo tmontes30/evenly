@@ -355,7 +355,10 @@ function renderGroup() {
       <button class="btn sm invite-btn" data-action="invite">${ICON.share} Invitar</button>
     </section>
     <nav class="tabs">${tabs}</nav>
-    ${body}`;
+    ${body}
+    ${state.people.length ? `<button class="fab" data-action="add-expense" aria-label="Agregar gasto">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" d="M12 5v14M5 12h14"/></svg>
+      <span>Gasto</span></button>` : ''}`;
 }
 
 function needPeople() {
