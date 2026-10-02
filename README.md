@@ -39,7 +39,9 @@ y abre <http://localhost:8000> (`localhost` ya viene autorizado en Firebase).
 
 ## Uso
 1. Entra con Google y crea un grupo (ej. "Matri").
-2. En **Grupo**: agrega a las personas que participan y, en **Acceso**, los emails de Google de quienes pueden ver/editar.
+2. Toca **Invitar** y comparte el link (WhatsApp, copiar, etc.). Quien lo abre entra con Google, pone su nombre y queda en el grupo.
+   También puedes agregar personas a mano en **Grupo** (si después entran por el link con el mismo nombre, quedan vinculadas).
+   "Generar link nuevo" invalida el anterior.
 3. En **Gastos**: anota cada gasto, quién lo pagó y entre quiénes se divide.
 4. En **Pagos**: registra cuando alguien le devuelve plata a otro (o usa "Registrar pago" desde el Resumen).
 5. **Resumen** muestra quién le debe a quién en tiempo real.
