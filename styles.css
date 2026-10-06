@@ -179,7 +179,8 @@ code { background: var(--surface-2); padding: 1px 6px; border-radius: 6px; }
 
 .person-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); }
 .person { padding: 16px; }
-.person-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.person-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; margin-bottom: 12px; }
+.person-head .badge { margin-left: auto; }
 .person-head b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .badge {
   font-size: 12px; font-weight: 700; padding: 3px 9px; border-radius: 999px;
