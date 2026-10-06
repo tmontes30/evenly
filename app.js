@@ -91,6 +91,9 @@ const fmt = (amount) => formatMoney(amount, state.group?.currency || 'CLP');
 const parse = (text) => parseMoney(text, state.group?.currency || 'CLP');
 const personName = (id) => state.people.find((p) => p.id === id)?.name ?? '(eliminado)';
 const sortedPeople = () => [...state.people].sort((a, b) => a.name.localeCompare(b.name, 'es'));
+// Las personas sin el campo `active` (creadas antes) cuentan como activas.
+const isActive = (p) => p.active !== false;
+const activePeople = () => sortedPeople().filter(isActive);
 const groupRef = () => doc(db, 'groups', state.gid);
 const inviteUrl = (code) => `${location.origin}${location.pathname}#/join/${code}`;
 const randomCode = () => Array.from(crypto.getRandomValues(new Uint8Array(15)))
@@ -243,9 +246,9 @@ async function joinGroup(name) {
   if (mine) {
     // ya estaba vinculado
   } else if (sameName) {
-    await updateDoc(sameName.ref, { email });
+    await updateDoc(sameName.ref, { email, active: true });
   } else {
-    await addDoc(collection(gref, 'people'), { name, email, createdAt: serverTimestamp() });
+    await addDoc(collection(gref, 'people'), { name, email, active: true, createdAt: serverTimestamp() });
   }
   toast(`¡Listo! Ya eres parte de ${invite.groupName}`);
   location.hash = `#/g/${invite.groupId}/resumen`;
@@ -394,7 +397,7 @@ function renderSummary() {
     return `<div class="card person">
       <div class="person-head">
         <span class="avatar">${initial(b.name)}</span>
-        <b>${esc(b.name)}</b>
+        <b>${esc(b.name)}${state.people.some((p) => p.id === b.id && !isActive(p)) ? ' <span class="badge">Inactivo</span>' : ''}</b>
         <span class="badge ${cls}">${label}</span>
       </div>
       <dl class="rows">
@@ -423,7 +426,8 @@ function renderSummary() {
 }
 
 function splitLabel(ids) {
-  if (ids.length === state.people.length && state.people.every((p) => ids.includes(p.id))) return 'entre todos';
+  const sameAs = (list) => ids.length === list.length && list.every((p) => ids.includes(p.id));
+  if (sameAs(state.people) || sameAs(activePeople())) return 'entre todos';
   return `entre ${ids.map((id) => esc(personName(id))).join(', ')}`;
 }
 
@@ -477,11 +481,17 @@ function renderSettings() {
   const g = state.group;
   const isOwner = g.ownerEmail === state.user.email;
   const hasMoves = state.expenses.length || state.payments.length;
+  const activeCount = activePeople().length;
   const people = sortedPeople().map((p) => `
-    <li class="item">
+    <li class="item ${isActive(p) ? '' : 'inactive'}">
       <div class="item-main item-person"><span class="avatar">${initial(p.name)}</span>
         <span class="person-name"><span>${esc(p.name)}${p.email === state.user.email ? ' <span class="badge">Tú</span>' : ''}</span>
         ${p.email ? `<span class="muted small">${esc(p.email)}</span>` : ''}</span></div>
+      <label class="switch" title="${isActive(p) ? 'Activo: entra en la división de gastos nuevos' : 'Inactivo: no entra en gastos nuevos, pero puede ver el grupo'}">
+        <input type="checkbox" data-action="toggle-person" data-id="${esc(p.id)}" ${isActive(p) ? 'checked' : ''}>
+        <span class="switch-track"></span>
+        <span class="switch-label">${isActive(p) ? 'Activo' : 'Inactivo'}</span>
+      </label>
       <div class="item-actions">
         <button class="icon-btn" data-action="rename-person" data-id="${esc(p.id)}" title="Renombrar">${ICON.edit}</button>
         <button class="icon-btn danger" data-action="del-person" data-id="${esc(p.id)}" title="Eliminar">${ICON.trash}</button>
@@ -497,8 +507,8 @@ function renderSettings() {
 
   return `
     <section class="section">
-      <div class="section-head"><h2>Personas</h2></div>
-      <p class="muted small">Quienes participan en los gastos. No necesitan cuenta.</p>
+      <div class="section-head"><h2>Personas</h2>${state.people.length ? `<span class="muted small">${activeCount} de ${state.people.length} activas</span>` : ''}</div>
+      <p class="muted small">Solo las personas <b>activas</b> entran en la división de gastos nuevos. Las inactivas siguen pudiendo ver el grupo y saldar lo que deben.</p>
       <div class="card">
         ${people ? `<ul class="list">${people}</ul>` : ''}
         <form class="inline-form" data-form="add-person">
@@ -580,8 +590,8 @@ function openDialog({ title, body, submitLabel = 'Guardar', onSubmit, onOpen }) 
 }
 dlg.addEventListener('click', (e) => { if (e.target === dlg) dlg.close(); });
 
-const personOptions = (selected) => sortedPeople().map((p) => `
-  <option value="${esc(p.id)}" ${p.id === selected ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
+const personOptions = (selected, list = sortedPeople()) => list.map((p) => `
+  <option value="${esc(p.id)}" ${p.id === selected ? 'selected' : ''}>${esc(p.name)}${isActive(p) ? '' : ' (inactivo)'}</option>`).join('');
 
 function readAmount(fd) {
   const amount = parse(fd.get('amount'));
@@ -611,7 +621,7 @@ function newGroupDialog() {
       const names = [...new Set(fd.get('people').split('\n').map((s) => s.trim()).filter(Boolean))];
       if (names.length) {
         const batch = writeBatch(db);
-        names.forEach((n) => batch.set(doc(collection(ref, 'people')), { name: n, createdAt: serverTimestamp() }));
+        names.forEach((n) => batch.set(doc(collection(ref, 'people')), { name: n, active: true, createdAt: serverTimestamp() }));
         await batch.commit();
       }
       location.hash = `#/g/${ref.id}/${names.length ? 'resumen' : 'ajustes'}`;
@@ -620,8 +630,14 @@ function newGroupDialog() {
 }
 
 function expenseDialog(expense) {
-  const all = state.people.map((p) => p.id);
-  const split = expense?.splitAmong ?? all;
+  // Solo personas activas; al editar, también las que ya estaban en el gasto.
+  const used = new Set(expense ? [expense.paidBy, ...(expense.splitAmong || [])] : []);
+  const choices = sortedPeople().filter((p) => isActive(p) || used.has(p.id));
+  if (!choices.length) {
+    toast('No hay personas activas. Activa a alguien en Grupo → Personas.');
+    return;
+  }
+  const split = expense?.splitAmong ?? choices.map((p) => p.id);
   openDialog({
     title: expense ? 'Editar gasto' : 'Nuevo gasto',
     body: `
@@ -630,11 +646,11 @@ function expenseDialog(expense) {
         <label>Monto<input name="amount" required inputmode="decimal" placeholder="0" value="${expense ? esc(moneyToInput(expense.amount, state.group.currency)) : ''}" autocomplete="off"></label>
         <label>Fecha<input name="date" type="date" required value="${esc(expense?.date || today())}"></label>
       </div>
-      <label>¿Quién pagó?<select name="paidBy" required>${personOptions(expense?.paidBy)}</select></label>
+      <label>¿Quién pagó?<select name="paidBy" required>${personOptions(expense?.paidBy, choices)}</select></label>
       <fieldset class="checks">
         <legend>Dividir en partes iguales entre <button type="button" class="link" data-toggle-all>Todos / ninguno</button></legend>
-        ${sortedPeople().map((p) => `
-          <label class="check"><input type="checkbox" name="split" value="${esc(p.id)}" ${split.includes(p.id) ? 'checked' : ''}> ${esc(p.name)}</label>`).join('')}
+        ${choices.map((p) => `
+          <label class="check"><input type="checkbox" name="split" value="${esc(p.id)}" ${split.includes(p.id) ? 'checked' : ''}> ${esc(p.name)}${isActive(p) ? '' : ' <span class="muted small">(inactivo)</span>'}</label>`).join('')}
         <p class="muted small" data-split-hint></p>
       </fieldset>`,
     onOpen: (form) => {
@@ -741,6 +757,16 @@ main.addEventListener('click', (e) => {
     case 'settle':
       return paymentDialog(null, { from: el.dataset.from, to: el.dataset.to, amount: Number(el.dataset.amount) });
     case 'rename-person': return renamePersonDialog(find('people'));
+    case 'toggle-person': {
+      const active = el.checked;
+      run(async () => {
+        await updateDoc(doc(groupRef(), 'people', id), { active });
+        toast(active
+          ? `${personName(id)} está activo y entra en los gastos nuevos`
+          : `${personName(id)} quedó inactivo: puede ver, pero no entra en gastos nuevos`);
+      });
+      return;
+    }
     case 'del-expense':
       if (confirm('¿Eliminar este gasto?')) run(() => deleteDoc(doc(groupRef(), 'expenses', id)));
       return;
@@ -799,7 +825,7 @@ main.addEventListener('submit', (e) => {
         toast('Ya hay alguien con ese nombre.');
         return;
       }
-      run(() => addDoc(collection(groupRef(), 'people'), { name, createdAt: serverTimestamp() }));
+      run(() => addDoc(collection(groupRef(), 'people'), { name, active: true, createdAt: serverTimestamp() }));
       return;
     }
     case 'add-email': {
