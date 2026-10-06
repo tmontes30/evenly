@@ -391,7 +391,13 @@ function renderSummary() {
     </li>`).join('')}</ul>`
     : `<div class="all-even"><b>¡Están todos a mano!</b><span class="muted">Nadie le debe nada a nadie.</span></div>`;
 
-  const cards = balances.map((b) => {
+  // Por limpieza, los inactivos que ya están a mano no se muestran.
+  const inactiveIds = new Set(state.people.filter((p) => !isActive(p)).map((p) => p.id));
+  const shown = balances.filter((b) => !(inactiveIds.has(b.id) && b.net === 0));
+  const hidden = balances.length - shown.length;
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+
+  const cards = shown.map((b) => {
     const cls = b.net > 0 ? 'pos' : b.net < 0 ? 'neg' : '';
     const label = b.net > 0 ? `Le deben ${fmt(b.net)}` : b.net < 0 ? `Debe ${fmt(-b.net)}` : 'A mano';
     return `<div class="card person">
@@ -411,8 +417,8 @@ function renderSummary() {
 
   return `
     <div class="stats">
-      <div class="card stat"><span class="muted small">Gasto total</span><strong>${fmt(total)}</strong><span class="muted small">${state.expenses.length} gastos</span></div>
-      <div class="card stat"><span class="muted small">Ya devuelto</span><strong>${fmt(paidBack)}</strong><span class="muted small">${state.payments.length} pagos</span></div>
+      <div class="card stat"><span class="muted small">Gasto total</span><strong>${fmt(total)}</strong><span class="muted small">${plural(state.expenses.length, 'gasto', 'gastos')}</span></div>
+      <div class="card stat"><span class="muted small">Ya devuelto</span><strong>${fmt(paidBack)}</strong><span class="muted small">${plural(state.payments.length, 'pago', 'pagos')}</span></div>
       <div class="card stat"><span class="muted small">Pendiente</span><strong class="${pending ? 'neg' : 'pos'}">${fmt(pending)}</strong><span class="muted small">para quedar a mano</span></div>
     </div>
     <section class="section">
@@ -420,7 +426,7 @@ function renderSummary() {
       <div class="card">${settleList}</div>
     </section>
     <section class="section">
-      <div class="section-head"><h2>Detalle por persona</h2></div>
+      <div class="section-head"><h2>Detalle por persona</h2>${hidden ? `<a class="muted small" href="#/g/${esc(state.gid)}/ajustes">${plural(hidden, 'inactiva oculta', 'inactivas ocultas')}</a>` : ''}</div>
       <div class="person-grid">${cards}</div>
     </section>`;
 }
