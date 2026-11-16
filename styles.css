@@ -287,6 +287,17 @@ dialog::backdrop { background: rgba(10, 15, 20, .45); backdrop-filter: blur(2px)
 .person-name { display: grid; min-width: 0; line-height: 1.3; }
 .person-name .small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; }
 
+/* ---------- ¿quién eres? (vincular cuenta) ---------- */
+.claim { display: grid; gap: 10px; padding: 18px 16px; margin-bottom: 14px; border: 2px solid var(--accent); }
+.claim-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.claim-btn {
+  display: inline-flex; align-items: center; gap: 8px; padding: 5px 14px 5px 5px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text); font: inherit; font-weight: 600; cursor: pointer;
+}
+.claim-btn .avatar { width: 28px; height: 28px; font-size: 13px; }
+.claim-btn:hover { border-color: var(--accent); background: var(--accent-soft); }
+.claim .link { margin: 0; }
+
 /* ---------- activo / inactivo ---------- */
 .switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-weight: 600; font-size: 13px; user-select: none; }
 .switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
