@@ -4,7 +4,7 @@ import {
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
 import {
   getFirestore, collection, doc, addDoc, setDoc, getDoc, getDocs, updateDoc, deleteDoc, onSnapshot,
-  query, where, serverTimestamp, writeBatch, arrayUnion, arrayRemove,
+  query, where, serverTimestamp, writeBatch, arrayUnion, arrayRemove, deleteField,
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 import { firebaseConfig } from './firebase-config.js';
 import {
@@ -167,7 +167,7 @@ function route() {
 function unsubGroup() {
   state.groupUnsubs.forEach((u) => u());
   Object.assign(state, {
-    groupUnsubs: [], gid: null, group: null, groupError: null, people: [], expenses: [], payments: [],
+    groupUnsubs: [], gid: null, group: null, groupError: null, people: [], peopleLoaded: false, expenses: [], payments: [],
   });
 }
 
@@ -183,6 +183,7 @@ function subscribeGroup(gid) {
   for (const name of ['people', 'expenses', 'payments']) {
     state.groupUnsubs.push(onSnapshot(collection(ref, name), (qs) => {
       state[name] = qs.docs.map((d) => ({ id: d.id, ...d.data() }));
+      if (name === 'people') state.peopleLoaded = true;
       render();
     }, onErr));
   }
@@ -225,33 +226,40 @@ function renderJoin() {
     <p class="muted">Te invitaron a</p>
     <h1>${esc(invite.groupName)}</h1>
     <form class="stack-form join-form" data-form="join">
-      <label>¿Cómo te llamas en el grupo?
-        <input name="name" required maxlength="40" value="${esc(state.user.displayName?.split(' ')[0] || '')}" autocomplete="off">
-      </label>
-      <span class="muted small">Si ya te agregaron con ese nombre, quedarás vinculado a esa misma persona.</span>
+      <span class="muted small">Al entrar eliges tu nombre de la lista de personas del grupo.</span>
       <button class="btn primary btn-block">Unirme al grupo</button>
     </form>
   </div>`;
 }
 
-async function joinGroup(name) {
+// Unirse solo da acceso. La persona se elige después de la lista (renderClaim);
+// desde el link nunca se crean personas, para no duplicar a nadie.
+async function joinGroup() {
   const { code, invite } = state.join;
-  const email = state.user.email;
-  const gref = doc(db, 'groups', invite.groupId);
-  await updateDoc(gref, { memberEmails: arrayUnion(email), lastInvite: code });
-  const people = (await getDocs(collection(gref, 'people'))).docs;
-  const mine = people.find((d) => d.data().email === email);
-  const sameName = people.find((d) => !d.data().email
-    && d.data().name.trim().toLowerCase() === name.toLowerCase());
-  if (mine) {
-    // ya estaba vinculado
-  } else if (sameName) {
-    await updateDoc(sameName.ref, { email, active: true });
-  } else {
-    await addDoc(collection(gref, 'people'), { name, email, active: true, createdAt: serverTimestamp() });
-  }
+  await updateDoc(doc(db, 'groups', invite.groupId), { memberEmails: arrayUnion(state.user.email), lastInvite: code });
   toast(`¡Listo! Ya eres parte de ${invite.groupName}`);
   location.hash = `#/g/${invite.groupId}/resumen`;
+}
+
+const claimHiddenKey = () => `evenly:noClaim:${state.gid}`;
+function renderClaim() {
+  if (!state.peopleLoaded || linkedPersonId()) return '';
+  try { if (localStorage.getItem(claimHiddenKey())) return ''; } catch { /* sin storage */ }
+  const g = state.group;
+  const free = sortedPeople().filter((p) => !p.email);
+  const owner = state.people.find((p) => p.email === g.ownerEmail)?.name || g.ownerEmail;
+  const isOwner = g.ownerEmail === state.user.email;
+  return `<section class="card claim">
+    <h3>¿Quién eres en este grupo?</h3>
+    ${free.length ? `<p class="muted small">Elige tu nombre para ver cuánto debes y a quién.</p>
+      <div class="claim-list">${free.map((p) => `
+        <button class="claim-btn" data-action="claim" data-id="${esc(p.id)}"><span class="avatar">${initial(p.name)}</span>${esc(p.name)}</button>`).join('')}
+      </div>` : ''}
+    <p class="muted small">${isOwner
+      ? 'Si no estás en la lista, agrégate en <a class="link" href="#/g/' + esc(g.id) + '/ajustes">Grupo → Personas</a>.'
+      : `¿No está tu nombre? Pídele a <b>${esc(owner)}</b>, que creó el grupo, que te agregue. Después vuelve aquí y elígelo.`}</p>
+    <button class="link link-muted" data-action="hide-claim">No participo en los gastos, ocultar</button>
+  </section>`;
 }
 
 async function ensureInvite() {
@@ -357,6 +365,7 @@ function renderGroup() {
       <h1>${esc(g.name)}</h1>
       <button class="btn sm invite-btn" data-action="invite">${ICON.share} Invitar</button>
     </section>
+    ${renderClaim()}
     <nav class="tabs">${tabs}</nav>
     ${body}
     ${state.people.length ? `<button class="fab" data-action="add-expense" aria-label="Agregar gasto">
@@ -584,7 +593,7 @@ function renderSettings() {
     <li class="item ${isActive(p) ? '' : 'inactive'}">
       <div class="item-main item-person"><span class="avatar">${initial(p.name)}</span>
         <span class="person-name"><span>${esc(p.name)}${p.email === state.user.email ? ' <span class="badge">Tú</span>' : ''}</span>
-        ${p.email ? `<span class="muted small">${esc(p.email)}</span>` : ''}</span></div>
+        ${p.email ? `<span class="muted small">${esc(p.email)} · <button class="link link-muted" data-action="unlink-person" data-id="${esc(p.id)}">desvincular</button></span>` : ''}</span></div>
       <label class="switch" title="${isActive(p) ? 'Activo: entra en la división de gastos nuevos' : 'Inactivo: no entra en gastos nuevos, pero puede ver el grupo'}">
         <input type="checkbox" data-action="toggle-person" data-id="${esc(p.id)}" ${isActive(p) ? 'checked' : ''}>
         <span class="switch-track"></span>
@@ -871,6 +880,24 @@ main.addEventListener('click', (e) => {
     case 'del-payment':
       if (confirm('¿Eliminar este pago?')) run(() => deleteDoc(doc(groupRef(), 'payments', id)));
       return;
+    case 'claim': {
+      const name = personName(id);
+      if (!confirm(`¿Eres ${name}? Quedará vinculado a tu cuenta (${state.user.email}).`)) return;
+      run(async () => {
+        await updateDoc(doc(groupRef(), 'people', id), { email: state.user.email });
+        toast(`Listo, eres ${name} en este grupo`);
+      });
+      return;
+    }
+    case 'hide-claim':
+      try { localStorage.setItem(claimHiddenKey(), '1'); } catch { /* sin storage */ }
+      render();
+      return;
+    case 'unlink-person':
+      if (confirm(`¿Desvincular a ${personName(id)} de su cuenta? Podrá volver a elegir su nombre.`)) {
+        run(() => updateDoc(doc(groupRef(), 'people', id), { email: deleteField() }));
+      }
+      return;
     case 'del-person': {
       const used = state.expenses.some((x) => x.paidBy === id || (x.splitAmong || []).includes(id))
         || state.payments.some((x) => x.from === id || x.to === id);
@@ -953,11 +980,9 @@ main.addEventListener('submit', (e) => {
       return;
     }
     case 'join': {
-      const name = fd.get('name').trim();
-      if (!name) return;
       const btn = $('button', form);
       btn.disabled = true;
-      joinGroup(name).catch((err) => { toast(friendly(err)); btn.disabled = false; });
+      joinGroup().catch((err) => { toast(friendly(err)); btn.disabled = false; });
       return;
     }
     default:
