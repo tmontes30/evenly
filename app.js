@@ -412,8 +412,7 @@ function renderMine(meId, balances, transfers) {
     : b.net > 0
       ? `${isMe ? 'Te deben' : `A ${who} le deben`} <span class="pos">${fmt(b.net)}</span>`
       : `${isMe ? 'Estás' : `${who} está`} <span class="pos">a mano</span>`;
-  const mine = transfers.filter((t) => t.from === meId || t.to === meId);
-  const rows = mine.map((t) => {
+  const row = (t) => {
     const out = t.from === meId;
     const other = esc(personName(out ? t.to : t.from));
     const text = out
@@ -427,7 +426,21 @@ function renderMine(meId, balances, transfers) {
       <span class="amount ${out ? 'neg' : 'pos'}">${fmt(t.amount)}</span>
       <button class="btn sm ${out ? 'primary' : ''}" data-action="settle" data-from="${esc(t.from)}" data-to="${esc(t.to)}" data-amount="${t.amount}">Registrar pago</button>
     </li>`;
-  }).join('');
+  };
+  const outgoing = transfers.filter((t) => t.from === meId);
+  const incoming = transfers.filter((t) => t.to === meId);
+  const rows = [...outgoing, ...incoming].map(row).join('');
+  // "Te deben" chico, siempre visible cuando el titular no es ya "Te deben".
+  let owedNote = '';
+  if (b.net <= 0) {
+    const reason = b.paid
+      ? `${isMe ? 'lo que pagaste' : 'lo que pagó'} (${fmt(b.paid)}) ya se descontó de ${b.net < 0 ? (isMe ? 'lo que debes' : 'lo que debe') : (isMe ? 'tu parte' : 'su parte')}.`
+      : `${isMe ? 'no has pagado' : 'no ha pagado'} gastos del grupo.`;
+    owedNote = `<div class="me-owed">
+      <span class="me-owed-total">${isMe ? 'Te deben' : 'Le deben'} <b class="pos">${fmt(0)}</b></span>
+      <span class="muted small">Nadie ${isMe ? 'te' : 'le'} tiene que pagar: ${reason}</span>
+    </div>`;
+  }
   const why = `${isMe ? 'Pagaste' : 'Pagó'} ${fmt(b.paid)} en gastos y ${isMe ? 'te corresponden' : 'le corresponden'} ${fmt(b.share)}`
     + `${b.sent ? ` · ${isMe ? 'ya pagaste' : 'ya pagó'} ${fmt(b.sent)}` : ''}`
     + `${b.received ? ` · ${isMe ? 'recibiste' : 'recibió'} ${fmt(b.received)}` : ''}.`;
@@ -440,6 +453,7 @@ function renderMine(meId, balances, transfers) {
       </div>
     </div>
     ${rows ? `<ul class="list">${rows}</ul>` : ''}
+    ${owedNote}
     <p class="muted small me-why">${why}</p>
   </section>`;
 }
