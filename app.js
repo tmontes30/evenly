@@ -371,24 +371,100 @@ function needPeople() {
     <a class="btn primary" href="#/g/${esc(state.gid)}/ajustes">Agregar personas</a></div>`;
 }
 
+// "¿Quién eres?" en el Resumen: se guarda por grupo en este navegador.
+// Por defecto es la persona vinculada al email de la cuenta.
+const viewAsKey = () => `evenly:viewAs:${state.gid}`;
+const linkedPersonId = () => state.people.find((p) => p.email && p.email === state.user?.email)?.id ?? null;
+function viewAsId() {
+  let saved = null;
+  try { saved = localStorage.getItem(viewAsKey()); } catch { /* sin storage */ }
+  if (saved === 'all') return null;
+  if (saved && state.people.some((p) => p.id === saved)) return saved;
+  return linkedPersonId();
+}
+function setViewAs(id) {
+  try { localStorage.setItem(viewAsKey(), id || 'all'); } catch { /* sin storage */ }
+  render();
+}
+
+function settleRow(t, meId) {
+  const mine = meId && (t.from === meId || t.to === meId);
+  const nameOf = (id) => (id === meId ? `<b class="me-name">${esc(personName(id))}</b>` : `<b>${esc(personName(id))}</b>`);
+  return `
+    <li class="settle ${mine ? 'mine' : ''}">
+      <div class="settle-who">
+        <span class="avatar">${initial(personName(t.from))}</span>
+        <span>${nameOf(t.from)} le debe a ${nameOf(t.to)}</span>
+      </div>
+      <span class="amount neg">${fmt(t.amount)}</span>
+      <button class="btn sm" data-action="settle" data-from="${esc(t.from)}" data-to="${esc(t.to)}" data-amount="${t.amount}">Registrar pago</button>
+    </li>`;
+}
+
+function renderMine(meId, balances, transfers) {
+  const b = balances.find((x) => x.id === meId);
+  if (!b) return '';
+  // Si la cuenta no está vinculada a nadie, quien elige "soy X" es X.
+  const isMe = meId === linkedPersonId() || !linkedPersonId();
+  const who = esc(b.name);
+  const headline = b.net < 0
+    ? `${isMe ? 'Debes' : `${who} debe`} <span class="neg">${fmt(-b.net)}</span>`
+    : b.net > 0
+      ? `${isMe ? 'Te deben' : `A ${who} le deben`} <span class="pos">${fmt(b.net)}</span>`
+      : `${isMe ? 'Estás' : `${who} está`} <span class="pos">a mano</span>`;
+  const mine = transfers.filter((t) => t.from === meId || t.to === meId);
+  const rows = mine.map((t) => {
+    const out = t.from === meId;
+    const other = esc(personName(out ? t.to : t.from));
+    const text = out
+      ? (isMe ? `Le pagas a <b>${other}</b>` : `Le paga a <b>${other}</b>`)
+      : (isMe ? `<b>${other}</b> te paga` : `<b>${other}</b> le paga`);
+    return `<li class="settle">
+      <div class="settle-who">
+        <span class="avatar ${out ? 'neg-av' : ''}">${initial(personName(out ? t.to : t.from))}</span>
+        <span>${text}</span>
+      </div>
+      <span class="amount ${out ? 'neg' : 'pos'}">${fmt(t.amount)}</span>
+      <button class="btn sm ${out ? 'primary' : ''}" data-action="settle" data-from="${esc(t.from)}" data-to="${esc(t.to)}" data-amount="${t.amount}">Registrar pago</button>
+    </li>`;
+  }).join('');
+  const why = `${isMe ? 'Pagaste' : 'Pagó'} ${fmt(b.paid)} en gastos y ${isMe ? 'te corresponden' : 'le corresponden'} ${fmt(b.share)}`
+    + `${b.sent ? ` · ${isMe ? 'ya pagaste' : 'ya pagó'} ${fmt(b.sent)}` : ''}`
+    + `${b.received ? ` · ${isMe ? 'recibiste' : 'recibió'} ${fmt(b.received)}` : ''}.`;
+  return `<section class="card me-card">
+    <div class="me-head">
+      <span class="avatar lg">${initial(b.name)}</span>
+      <div class="me-title">
+        <span class="muted small">${isMe ? 'Tu saldo' : `Saldo de ${who}`}</span>
+        <strong>${headline}</strong>
+      </div>
+    </div>
+    ${rows ? `<ul class="list">${rows}</ul>` : ''}
+    <p class="muted small me-why">${why}</p>
+  </section>`;
+}
+
 function renderSummary() {
   if (!state.people.length) return needPeople();
+  const meId = viewAsId();
   const balances = computeBalances(state.people, state.expenses, state.payments)
     .sort((a, b) => b.net - a.net);
+  // Las transferencias se calculan antes de reordenar, así no cambian según quién mira.
   const transfers = settleUp(balances);
+  balances.sort((a, b) => (b.id === meId) - (a.id === meId));
   const total = state.expenses.reduce((s, e) => s + (e.amount || 0), 0);
   const paidBack = state.payments.reduce((s, p) => s + (p.amount || 0), 0);
   const pending = transfers.reduce((s, t) => s + t.amount, 0);
 
-  const settleList = transfers.length ? `<ul class="list">${transfers.map((t) => `
-    <li class="settle">
-      <div class="settle-who">
-        <span class="avatar">${initial(personName(t.from))}</span>
-        <span><b>${esc(personName(t.from))}</b> le debe a <b>${esc(personName(t.to))}</b></span>
-      </div>
-      <span class="amount neg">${fmt(t.amount)}</span>
-      <button class="btn sm" data-action="settle" data-from="${esc(t.from)}" data-to="${esc(t.to)}" data-amount="${t.amount}">Registrar pago</button>
-    </li>`).join('')}</ul>`
+  const viewAs = `<label class="view-as">
+      <span>¿Quién eres?</span>
+      <select data-change="view-as">
+        <option value="all" ${meId ? '' : 'selected'}>Ver todo el grupo</option>
+        ${sortedPeople().map((p) => `<option value="${esc(p.id)}" ${p.id === meId ? 'selected' : ''}>${esc(p.name)}${p.id === linkedPersonId() ? ' (tú)' : ''}</option>`).join('')}
+      </select>
+    </label>`;
+
+  const settleList = transfers.length ? `<ul class="list">${transfers.map((t) => settleRow(t, meId)).join('')}</ul>`
     : `<div class="all-even"><b>¡Están todos a mano!</b><span class="muted">Nadie le debe nada a nadie.</span></div>`;
 
   // Por limpieza, los inactivos que ya están a mano no se muestran.
@@ -400,10 +476,10 @@ function renderSummary() {
   const cards = shown.map((b) => {
     const cls = b.net > 0 ? 'pos' : b.net < 0 ? 'neg' : '';
     const label = b.net > 0 ? `Le deben ${fmt(b.net)}` : b.net < 0 ? `Debe ${fmt(-b.net)}` : 'A mano';
-    return `<div class="card person">
+    return `<div class="card person ${b.id === meId ? 'me' : ''}">
       <div class="person-head">
         <span class="avatar">${initial(b.name)}</span>
-        <b>${esc(b.name)}${state.people.some((p) => p.id === b.id && !isActive(p)) ? ' <span class="badge">Inactivo</span>' : ''}</b>
+        <b>${esc(b.name)}${b.id === meId && b.id === linkedPersonId() ? ' <span class="muted">(tú)</span>' : ''}${state.people.some((p) => p.id === b.id && !isActive(p)) ? ' <span class="badge">Inactivo</span>' : ''}</b>
         <span class="badge ${cls}">${label}</span>
       </div>
       <dl class="rows">
@@ -416,13 +492,15 @@ function renderSummary() {
   }).join('');
 
   return `
+    ${viewAs}
+    ${meId ? renderMine(meId, balances, transfers) : ''}
     <div class="stats">
       <div class="card stat"><span class="muted small">Gasto total</span><strong>${fmt(total)}</strong><span class="muted small">${plural(state.expenses.length, 'gasto', 'gastos')}</span></div>
       <div class="card stat"><span class="muted small">Ya devuelto</span><strong>${fmt(paidBack)}</strong><span class="muted small">${plural(state.payments.length, 'pago', 'pagos')}</span></div>
       <div class="card stat"><span class="muted small">Pendiente</span><strong class="${pending ? 'neg' : 'pos'}">${fmt(pending)}</strong><span class="muted small">para quedar a mano</span></div>
     </div>
     <section class="section">
-      <div class="section-head"><h2>Para quedar a mano</h2></div>
+      <div class="section-head"><h2>${meId ? 'Todo el grupo para quedar a mano' : 'Para quedar a mano'}</h2></div>
       <div class="card">${settleList}</div>
     </section>
     <section class="section">
@@ -816,6 +894,11 @@ main.addEventListener('click', (e) => {
       return;
     default:
   }
+});
+
+main.addEventListener('change', (e) => {
+  const el = e.target.closest('[data-change]');
+  if (el?.dataset.change === 'view-as') setViewAs(el.value === 'all' ? null : el.value);
 });
 
 main.addEventListener('submit', (e) => {
